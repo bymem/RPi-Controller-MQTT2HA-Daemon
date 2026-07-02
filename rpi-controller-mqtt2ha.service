@@ -1,0 +1,19 @@
+[Unit]
+Description=RPi Controller MQTT2HA Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kiosk
+WorkingDirectory=/opt/rpi-controller-mqtt2ha
+ExecStart=/usr/bin/python3 /opt/rpi-controller-mqtt2ha/daemon.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+# Needed so display commands (xset, wlopm) can reach the X11 session.
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=multi-user.target
