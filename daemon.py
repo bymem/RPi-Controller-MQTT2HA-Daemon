@@ -697,6 +697,33 @@ class Daemon:
             self._publish_offline()
             subprocess.Popen(["sudo", "shutdown", "-h", "now"])
 
+    def _get_chromium_session_env(self):
+        """
+        Read the display session environment from the running chromium process.
+        This is the only reliable way to get valid DISPLAY/XAUTHORITY/WAYLAND_DISPLAY
+        credentials from inside a systemd service that has no login session of its own.
+        Returns None if chromium is not running.
+        """
+        try:
+            result = subprocess.run(
+                ["pgrep", "-x", "chromium"],
+                capture_output=True, text=True, timeout=3
+            )
+            if result.returncode != 0:
+                return None
+            pid = result.stdout.strip().splitlines()[0]
+            with open(f"/proc/{pid}/environ", "rb") as f:
+                raw = f.read()
+            env = {}
+            for entry in raw.split(b"\x00"):
+                if b"=" in entry:
+                    key, val = entry.split(b"=", 1)
+                    env[key.decode(errors="replace")] = val.decode(errors="replace")
+            return env
+        except Exception as e:
+            log.debug(f"Could not read chromium session env: {e}")
+            return None
+
     def _handle_refresh_browser(self):
         log.info("Refreshing Chromium browser")
 
@@ -706,22 +733,26 @@ class Daemon:
             log.warning("Browser refresh failed: chromium binary not found in PATH")
             return
 
-        # XAUTHORITY is required so a systemd service (no login shell) can connect
-        # to the running X session. Default location covers Pi OS / LightDM.
-        xauth = os.environ.get("XAUTHORITY") or os.path.expanduser("~/.Xauthority")
-        env = {**os.environ, "DISPLAY": ":0", "XAUTHORITY": xauth}
-        log.info(f"Using DISPLAY=:0 XAUTHORITY={xauth}")
+        # Capture the session environment from the running chromium before killing it.
+        # This gives us the correct DISPLAY/XAUTHORITY/WAYLAND_DISPLAY tokens that
+        # a systemd service cannot obtain any other way.
+        session_env = self._get_chromium_session_env()
+        if session_env:
+            log.info(f"Captured session env from running chromium (DISPLAY={session_env.get('DISPLAY')}, WAYLAND_DISPLAY={session_env.get('WAYLAND_DISPLAY')})")
+        else:
+            log.warning("Chromium is not running — cannot capture session env, relaunch may fail")
+            session_env = {**os.environ}
 
         try:
-            subprocess.run(["pkill", "-f", "chromium"], timeout=5)
+            subprocess.run(["pkill", "-x", "chromium"], timeout=5)
             time.sleep(2)
             proc = subprocess.Popen(
                 [chromium, "--kiosk", "--noerrdialogs", "--disable-infobars"],
-                env=env,
+                env=session_env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
-            # Give chromium a moment to fail fast (X auth error, missing display, etc.)
+            # Give chromium a moment to fail fast on display errors.
             time.sleep(1)
             if proc.poll() is not None:
                 err = proc.stderr.read().decode("utf-8", errors="replace").strip()
