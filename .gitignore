@@ -1,5 +1,7 @@
+.codegraph
 config.ini
 __pycache__/
 *.pyc
 *.pyo
 .env
+RPi-Controller-MQTT2HA-Daemon-spec.md
