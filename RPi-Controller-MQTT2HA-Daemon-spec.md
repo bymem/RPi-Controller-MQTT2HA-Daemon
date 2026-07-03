@@ -35,7 +35,7 @@ All configuration via `config.ini`, nothing hardcoded:
 
 ```ini
 [mqtt]
-host = 192.168.10.20
+host = 192.168.1.100
 port = 1883
 user = kiosk
 password = yourpassword

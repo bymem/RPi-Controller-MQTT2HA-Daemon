@@ -6,6 +6,7 @@ set -e
 INSTALL_DIR="/opt/rpi-controller-mqtt2ha"
 SERVICE_NAME="rpi-controller-mqtt2ha"
 SERVICE_FILE="rpi-controller-mqtt2ha.service"
+SERVICE_USER="$(whoami)"
 
 echo "=== RPi Controller MQTT2HA Daemon — Installer ==="
 echo ""
@@ -64,8 +65,9 @@ sudo "${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt" 
 # ── systemd service ───────────────────────────────────────────────────────────
 
 echo ""
-echo "Installing systemd service..."
-sudo cp "$SERVICE_FILE" "/etc/systemd/system/${SERVICE_FILE}"
+echo "Installing systemd service (running as user: ${SERVICE_USER})..."
+# Substitute the placeholder user in the service file with the actual user running this script.
+sed "s/^User=.*/User=${SERVICE_USER}/" "$SERVICE_FILE" | sudo tee "/etc/systemd/system/${SERVICE_FILE}" > /dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE_NAME"
 sudo systemctl start "$SERVICE_NAME"
@@ -93,10 +95,10 @@ SUDOERS_FILE="/etc/sudoers.d/rpi-controller-mqtt2ha"
 if [[ ! -f "$SUDOERS_FILE" ]]; then
     echo "Adding passwordless sudo rules for service commands..."
     cat <<EOF | sudo tee "$SUDOERS_FILE" > /dev/null
-# Allow the kiosk user to run these commands without a password
-kiosk ALL=(ALL) NOPASSWD: /sbin/reboot
-kiosk ALL=(ALL) NOPASSWD: /sbin/shutdown
-kiosk ALL=(ALL) NOPASSWD: /bin/systemctl restart rpi-controller-mqtt2ha.service
+# Allow the service user to run these commands without a password
+${SERVICE_USER} ALL=(ALL) NOPASSWD: /sbin/reboot
+${SERVICE_USER} ALL=(ALL) NOPASSWD: /sbin/shutdown
+${SERVICE_USER} ALL=(ALL) NOPASSWD: /bin/systemctl restart rpi-controller-mqtt2ha.service
 EOF
     sudo chmod 0440 "$SUDOERS_FILE"
     echo "Sudoers rules written to ${SUDOERS_FILE}"

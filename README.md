@@ -52,7 +52,7 @@ Edit `/opt/rpi-controller-mqtt2ha/config.ini`:
 
 ```ini
 [mqtt]
-host = 192.168.10.20
+host = 192.168.1.100
 port = 1883
 user = kiosk
 password = yourpassword
@@ -161,6 +161,19 @@ kiosk ALL=(ALL) NOPASSWD: /bin/systemctl restart rpi-controller-mqtt2ha.service
 ```bash
 journalctl -u rpi-controller-mqtt2ha -f
 ```
+
+---
+
+## Updating
+
+Pull the latest version and redeploy in one command:
+
+```bash
+cd ~/rpi-controller-mqtt2ha
+./update.sh
+```
+
+This pulls from git, copies the updated daemon to `/opt/`, reinstalls Python packages if `requirements.txt` changed, and restarts the service.
 
 ---
 

@@ -698,11 +698,16 @@ class Daemon:
     def _handle_refresh_browser(self):
         log.info("Refreshing Chromium browser")
         env = {**os.environ, "DISPLAY": ":0"}
+        # Binary is "chromium" on Pi OS Bookworm, "chromium-browser" on older releases.
+        chromium = shutil.which("chromium") or shutil.which("chromium-browser")
+        if not chromium:
+            log.warning("Browser refresh failed: chromium binary not found in PATH")
+            return
         try:
             subprocess.run(["pkill", "-f", "chromium"], timeout=5)
             time.sleep(2)
             subprocess.Popen(
-                ["chromium-browser", "--kiosk", "--noerrdialogs", "--disable-infobars"],
+                [chromium, "--kiosk", "--noerrdialogs", "--disable-infobars"],
                 env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
