@@ -30,8 +30,8 @@ Compatible with Raspberry Pi 3B+, 4, and 5.
 ## Install
 
 ```bash
-git clone https://github.com/bymem/RPi-Controller-MQTT2HA-Daemon /opt/rpi-controller-mqtt2ha
-cd /opt/rpi-controller-mqtt2ha
+git clone https://github.com/bymem/RPi-Controller-MQTT2HA-Daemon ~/rpi-controller-mqtt2ha
+cd ~/rpi-controller-mqtt2ha
 chmod +x install.sh
 ./install.sh
 ```
