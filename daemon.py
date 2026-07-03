@@ -705,8 +705,16 @@ class Daemon:
             log.warning("Browser refresh triggered but refresh_command is not configured")
             return
         log.info(f"Refreshing browser: {cmd}")
+        # systemctl --user (and similar tools) need these vars which are absent
+        # in a system service environment. Both paths are fixed on systemd systems.
+        uid = os.getuid()
+        env = {
+            **os.environ,
+            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+        }
         try:
-            subprocess.run(cmd, shell=True, timeout=15, check=True)
+            subprocess.run(cmd, shell=True, env=env, timeout=15, check=True)
             log.info("Browser refresh command completed")
         except subprocess.CalledProcessError as e:
             log.warning(f"Browser refresh command failed (rc={e.returncode}): {cmd}")
