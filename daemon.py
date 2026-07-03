@@ -238,11 +238,25 @@ class BrightnessController:
                 ["ddcutil", "detect", "--brief"],
                 capture_output=True, timeout=5
             )
-            if result.returncode == 0 and b"Display" in result.stdout:
+            output = result.stdout.decode("utf-8", errors="replace")
+
+            # A display was found but explicitly says it doesn't support DDC/CI.
+            # These strings appear in ddcutil output for monitors that are connected
+            # but don't implement the DDC/CI protocol.
+            ddc_unsupported = (
+                "does not support DDC/CI" in output
+                or "Invalid display" in output
+                or "No displays found" in output
+            )
+            has_display = "Display" in output
+
+            if result.returncode == 0 and has_display and not ddc_unsupported:
                 self._method = self.METHOD_DDCUTIL
                 log.info("Brightness: using ddcutil")
+            elif ddc_unsupported:
+                log.info("Brightness: HDMI brightness not available on this monitor (DDC/CI not supported)")
             else:
-                log.warning("Brightness: ddcutil found but no compatible displays detected")
+                log.info("Brightness: ddcutil found no usable displays")
         except Exception as e:
             log.warning(f"Brightness: ddcutil detect failed: {e}")
 
