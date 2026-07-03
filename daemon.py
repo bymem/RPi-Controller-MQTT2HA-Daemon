@@ -14,7 +14,9 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 
 import psutil
 import paho.mqtt.client as mqtt
@@ -548,7 +550,7 @@ class SensorCollector:
             "fs_disk_used": disk.used // (1024 * 1024),
             "uptime_sec": uptime_sec,
             "uptime": uptime_str,
-            "last_update": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+            "last_update": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00"),
             "hostname": self._hostname,
             "fqdn": self._fqdn,
             "ip_addr": get_ip(),
@@ -697,21 +699,35 @@ class Daemon:
 
     def _handle_refresh_browser(self):
         log.info("Refreshing Chromium browser")
-        env = {**os.environ, "DISPLAY": ":0"}
+
         # Binary is "chromium" on Pi OS Bookworm, "chromium-browser" on older releases.
         chromium = shutil.which("chromium") or shutil.which("chromium-browser")
         if not chromium:
             log.warning("Browser refresh failed: chromium binary not found in PATH")
             return
+
+        # XAUTHORITY is required so a systemd service (no login shell) can connect
+        # to the running X session. Default location covers Pi OS / LightDM.
+        xauth = os.environ.get("XAUTHORITY") or os.path.expanduser("~/.Xauthority")
+        env = {**os.environ, "DISPLAY": ":0", "XAUTHORITY": xauth}
+        log.info(f"Using DISPLAY=:0 XAUTHORITY={xauth}")
+
         try:
             subprocess.run(["pkill", "-f", "chromium"], timeout=5)
             time.sleep(2)
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 [chromium, "--kiosk", "--noerrdialogs", "--disable-infobars"],
                 env=env,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
+            # Give chromium a moment to fail fast (X auth error, missing display, etc.)
+            time.sleep(1)
+            if proc.poll() is not None:
+                err = proc.stderr.read().decode("utf-8", errors="replace").strip()
+                log.warning(f"Chromium exited immediately (rc={proc.returncode}): {err}")
+            else:
+                log.info(f"Chromium relaunched (pid={proc.pid})")
         except Exception as e:
             log.warning(f"Browser refresh failed: {e}")
 
