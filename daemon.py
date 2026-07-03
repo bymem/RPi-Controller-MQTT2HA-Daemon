@@ -697,32 +697,38 @@ class Daemon:
             self._publish_offline()
             subprocess.Popen(["sudo", "shutdown", "-h", "now"])
 
-    def _get_chromium_session_env(self):
+    def _get_session_env(self):
         """
-        Read the display session environment from the running chromium process.
-        This is the only reliable way to get valid DISPLAY/XAUTHORITY/WAYLAND_DISPLAY
-        credentials from inside a systemd service that has no login session of its own.
-        Returns None if chromium is not running.
+        Find the graphical session environment by scanning /proc for any process
+        owned by this user that has DISPLAY or WAYLAND_DISPLAY set.
+        A systemd service has no login session of its own, so we borrow the env
+        from whatever GUI process is already running (window manager, browser, etc.).
+        Works for both X11 and Wayland without needing to know which is in use.
         """
-        try:
-            result = subprocess.run(
-                ["pgrep", "-x", "chromium"],
-                capture_output=True, text=True, timeout=3
-            )
-            if result.returncode != 0:
-                return None
-            pid = result.stdout.strip().splitlines()[0]
-            with open(f"/proc/{pid}/environ", "rb") as f:
-                raw = f.read()
-            env = {}
-            for entry in raw.split(b"\x00"):
-                if b"=" in entry:
-                    key, val = entry.split(b"=", 1)
-                    env[key.decode(errors="replace")] = val.decode(errors="replace")
-            return env
-        except Exception as e:
-            log.debug(f"Could not read chromium session env: {e}")
-            return None
+        uid = os.getuid()
+        for entry in os.scandir("/proc"):
+            if not entry.name.isdigit():
+                continue
+            try:
+                if entry.stat().st_uid != uid:
+                    continue
+                with open(f"/proc/{entry.name}/environ", "rb") as f:
+                    raw = f.read()
+                env = {}
+                for item in raw.split(b"\x00"):
+                    if b"=" in item:
+                        k, v = item.split(b"=", 1)
+                        env[k.decode(errors="replace")] = v.decode(errors="replace")
+                if "DISPLAY" in env or "WAYLAND_DISPLAY" in env:
+                    log.info(
+                        f"Session env found in pid {entry.name} "
+                        f"(DISPLAY={env.get('DISPLAY')!r}, "
+                        f"WAYLAND_DISPLAY={env.get('WAYLAND_DISPLAY')!r})"
+                    )
+                    return env
+            except (PermissionError, FileNotFoundError, ProcessLookupError):
+                continue
+        return None
 
     def _handle_refresh_browser(self):
         log.info("Refreshing Chromium browser")
@@ -733,18 +739,16 @@ class Daemon:
             log.warning("Browser refresh failed: chromium binary not found in PATH")
             return
 
-        # Capture the session environment from the running chromium before killing it.
-        # This gives us the correct DISPLAY/XAUTHORITY/WAYLAND_DISPLAY tokens that
-        # a systemd service cannot obtain any other way.
-        session_env = self._get_chromium_session_env()
-        if session_env:
-            log.info(f"Captured session env from running chromium (DISPLAY={session_env.get('DISPLAY')}, WAYLAND_DISPLAY={session_env.get('WAYLAND_DISPLAY')})")
-        else:
-            log.warning("Chromium is not running — cannot capture session env, relaunch may fail")
-            session_env = {**os.environ}
+        # Borrow the graphical session environment from a running GUI process.
+        # This gives us valid DISPLAY/XAUTHORITY/WAYLAND_DISPLAY/XDG_RUNTIME_DIR
+        # tokens that a systemd service cannot obtain any other way.
+        session_env = self._get_session_env()
+        if not session_env:
+            log.warning("No graphical session found — cannot relaunch browser")
+            return
 
         try:
-            subprocess.run(["pkill", "-x", "chromium"], timeout=5)
+            subprocess.run(["pkill", "-f", "chromium"], timeout=5)
             time.sleep(2)
             proc = subprocess.Popen(
                 [chromium, "--kiosk", "--noerrdialogs", "--disable-infobars"],
