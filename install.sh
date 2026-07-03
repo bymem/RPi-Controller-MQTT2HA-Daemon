@@ -14,7 +14,9 @@ echo ""
 
 echo "Installing system dependencies..."
 sudo apt-get update -qq
-sudo apt-get install -y python3 python3-pip python3-psutil python3-apt
+# python3-venv required on Bookworm; python3-psutil and python3-apt pulled from
+# system packages into the venv so pip only needs to add paho-mqtt.
+sudo apt-get install -y python3 python3-venv python3-psutil python3-apt
 
 # ── Optional: ddcutil for HDMI brightness control ─────────────────────────────
 
@@ -30,12 +32,6 @@ if [[ "$INSTALL_DDCUTIL" =~ ^[Yy]$ ]]; then
     echo "NOTE: I2C was just enabled. A reboot is required before ddcutil will work."
     NEEDS_REBOOT=1
 fi
-
-# ── Python packages ───────────────────────────────────────────────────────────
-
-echo ""
-echo "Installing Python packages..."
-pip3 install --user -r "$(dirname "$0")/requirements.txt"
 
 # ── Install files ─────────────────────────────────────────────────────────────
 
@@ -53,6 +49,17 @@ else
 fi
 
 sudo chmod +x "${INSTALL_DIR}/daemon.py"
+
+# ── Python venv ───────────────────────────────────────────────────────────────
+# --system-site-packages lets the venv use python3-apt and python3-psutil from
+# the system, so pip only needs to install paho-mqtt. This avoids the PEP 668
+# "externally managed environment" error on Pi OS Bookworm and later.
+
+echo ""
+echo "Creating Python virtual environment..."
+sudo python3 -m venv --system-site-packages "${INSTALL_DIR}/venv"
+echo "Installing Python packages into venv..."
+sudo "${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt" --quiet
 
 # ── systemd service ───────────────────────────────────────────────────────────
 
