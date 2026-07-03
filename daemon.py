@@ -700,14 +700,18 @@ class Daemon:
     def _get_session_env(self):
         """
         Find the graphical session environment by scanning /proc for any process
-        owned by this user that has DISPLAY or WAYLAND_DISPLAY set.
+        owned by this user that has real X11 or Wayland credentials.
         A systemd service has no login session of its own, so we borrow the env
         from whatever GUI process is already running (window manager, browser, etc.).
-        Works for both X11 and Wayland without needing to know which is in use.
+
+        We require XAUTHORITY for X11 (not just DISPLAY) so we don't accidentally
+        match our own process, which has DISPLAY=:0 from the service file but no auth.
         """
+        own_pid = str(os.getpid())
         uid = os.getuid()
+
         for entry in os.scandir("/proc"):
-            if not entry.name.isdigit():
+            if not entry.name.isdigit() or entry.name == own_pid:
                 continue
             try:
                 if entry.stat().st_uid != uid:
@@ -719,15 +723,33 @@ class Daemon:
                     if b"=" in item:
                         k, v = item.split(b"=", 1)
                         env[k.decode(errors="replace")] = v.decode(errors="replace")
-                if "DISPLAY" in env or "WAYLAND_DISPLAY" in env:
+                # Accept Wayland sessions, or X11 sessions that have real auth credentials.
+                has_wayland = "WAYLAND_DISPLAY" in env
+                has_x11 = "DISPLAY" in env and "XAUTHORITY" in env
+                if has_wayland or has_x11:
                     log.info(
                         f"Session env found in pid {entry.name} "
                         f"(DISPLAY={env.get('DISPLAY')!r}, "
-                        f"WAYLAND_DISPLAY={env.get('WAYLAND_DISPLAY')!r})"
+                        f"WAYLAND_DISPLAY={env.get('WAYLAND_DISPLAY')!r}, "
+                        f"XAUTHORITY={env.get('XAUTHORITY')!r})"
                     )
                     return env
             except (PermissionError, FileNotFoundError, ProcessLookupError):
                 continue
+
+        # No live session process found (e.g. chromium was the only GUI app and is
+        # now dead). Try constructing the env from the standard Pi OS / LightDM paths.
+        xauth = os.path.expanduser("~/.Xauthority")
+        if os.path.exists(xauth):
+            log.info(f"No session process found — falling back to DISPLAY=:0 XAUTHORITY={xauth}")
+            return {
+                **os.environ,
+                "DISPLAY": ":0",
+                "XAUTHORITY": xauth,
+                "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+            }
+
+        log.warning("No graphical session found and ~/.Xauthority does not exist")
         return None
 
     def _handle_refresh_browser(self):
