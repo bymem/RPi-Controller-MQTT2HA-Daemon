@@ -103,6 +103,19 @@ sudo reboot
 
 ---
 
+## Browser refresh
+
+The **Refresh Browser** button runs a configurable shell command. Set it to whatever restarts your kiosk:
+
+```ini
+[browser]
+refresh_command = systemctl --user restart kiosk.service
+```
+
+Any shell command works — `systemctl`, a custom script, `pkill`, whatever your setup needs. Leave `refresh_command` empty (or remove the option) to disable the button entirely so it won't appear in HA.
+
+---
+
 ## Display commands (X11 vs Wayland)
 
 The `on_command` and `off_command` are just shell strings — swap them for your compositor:

@@ -362,7 +362,7 @@ def _device_payload(cfg, hostname, mac, model, os_ver):
     return dev
 
 
-def publish_discovery(client, cfg, hostname, mac, model, os_ver, brightness_available, net_ifaces):
+def publish_discovery(client, cfg, hostname, mac, model, os_ver, brightness_available, net_ifaces, browser_refresh):
     """Publish all HA MQTT discovery payloads for sensors, switches, and buttons."""
     prefix = cfg.get("mqtt", "discovery_prefix", fallback="homeassistant")
     base = cfg.get("mqtt", "base_topic", fallback="rpi2ha")
@@ -466,11 +466,12 @@ def publish_discovery(client, cfg, hostname, mac, model, os_ver, brightness_avai
     # ── Buttons ───────────────────────────────────────────────────────────────
 
     buttons = [
-        ("reboot",           "Reboot",           "restart",     "mdi:restart"),
-        ("shutdown",         "Shutdown",          "identify",    "mdi:power"),
-        ("refresh_browser",  "Refresh Browser",   None,          "mdi:web-refresh"),
-        ("restart_service",  "Restart Service",   "restart",     "mdi:refresh"),
+        ("reboot",          "Reboot",          "restart",  "mdi:restart"),
+        ("shutdown",        "Shutdown",         "identify", "mdi:power"),
+        ("restart_service", "Restart Service",  "restart",  "mdi:refresh"),
     ]
+    if browser_refresh:
+        buttons.append(("refresh_browser", "Refresh Browser", None, "mdi:web-refresh"))
     for cmd_id, label, dev_class, icon in buttons:
         p = {
             "name": f"{name} {label}",
@@ -585,6 +586,7 @@ class Daemon:
         self._os_ver = read_os_version()
         self._mac = get_mac()
         self._collector = SensorCollector(self._model, self._os_ver, self._hostname)
+        self._browser_refresh_cmd = self._cfg.get("browser", "refresh_command", fallback="").strip()
         self._running = False
         self._report_count = 0
         self._client = self._build_mqtt_client()
@@ -630,7 +632,7 @@ class Daemon:
         publish_discovery(
             self._client, self._cfg, self._hostname, self._mac,
             self._model, self._os_ver, self._brightness.available,
-            self._collector.net_ifaces(),
+            self._collector.net_ifaces(), bool(self._browser_refresh_cmd),
         )
         log.info("Discovery payloads published")
 
@@ -697,94 +699,17 @@ class Daemon:
             self._publish_offline()
             subprocess.Popen(["sudo", "shutdown", "-h", "now"])
 
-    def _get_session_env(self):
-        """
-        Find the graphical session environment by scanning /proc for any process
-        owned by this user that has real X11 or Wayland credentials.
-        A systemd service has no login session of its own, so we borrow the env
-        from whatever GUI process is already running (window manager, browser, etc.).
-
-        We require XAUTHORITY for X11 (not just DISPLAY) so we don't accidentally
-        match our own process, which has DISPLAY=:0 from the service file but no auth.
-        """
-        own_pid = str(os.getpid())
-        uid = os.getuid()
-
-        for entry in os.scandir("/proc"):
-            if not entry.name.isdigit() or entry.name == own_pid:
-                continue
-            try:
-                if entry.stat().st_uid != uid:
-                    continue
-                with open(f"/proc/{entry.name}/environ", "rb") as f:
-                    raw = f.read()
-                env = {}
-                for item in raw.split(b"\x00"):
-                    if b"=" in item:
-                        k, v = item.split(b"=", 1)
-                        env[k.decode(errors="replace")] = v.decode(errors="replace")
-                # Accept Wayland sessions, or X11 sessions that have real auth credentials.
-                has_wayland = "WAYLAND_DISPLAY" in env
-                has_x11 = "DISPLAY" in env and "XAUTHORITY" in env
-                if has_wayland or has_x11:
-                    log.info(
-                        f"Session env found in pid {entry.name} "
-                        f"(DISPLAY={env.get('DISPLAY')!r}, "
-                        f"WAYLAND_DISPLAY={env.get('WAYLAND_DISPLAY')!r}, "
-                        f"XAUTHORITY={env.get('XAUTHORITY')!r})"
-                    )
-                    return env
-            except (PermissionError, FileNotFoundError, ProcessLookupError):
-                continue
-
-        # No live session process found (e.g. chromium was the only GUI app and is
-        # now dead). Try constructing the env from the standard Pi OS / LightDM paths.
-        xauth = os.path.expanduser("~/.Xauthority")
-        if os.path.exists(xauth):
-            log.info(f"No session process found — falling back to DISPLAY=:0 XAUTHORITY={xauth}")
-            return {
-                **os.environ,
-                "DISPLAY": ":0",
-                "XAUTHORITY": xauth,
-                "XDG_RUNTIME_DIR": f"/run/user/{uid}",
-            }
-
-        log.warning("No graphical session found and ~/.Xauthority does not exist")
-        return None
-
     def _handle_refresh_browser(self):
-        log.info("Refreshing Chromium browser")
-
-        # Binary is "chromium" on Pi OS Bookworm, "chromium-browser" on older releases.
-        chromium = shutil.which("chromium") or shutil.which("chromium-browser")
-        if not chromium:
-            log.warning("Browser refresh failed: chromium binary not found in PATH")
+        cmd = self._browser_refresh_cmd
+        if not cmd:
+            log.warning("Browser refresh triggered but refresh_command is not configured")
             return
-
-        # Borrow the graphical session environment from a running GUI process.
-        # This gives us valid DISPLAY/XAUTHORITY/WAYLAND_DISPLAY/XDG_RUNTIME_DIR
-        # tokens that a systemd service cannot obtain any other way.
-        session_env = self._get_session_env()
-        if not session_env:
-            log.warning("No graphical session found — cannot relaunch browser")
-            return
-
+        log.info(f"Refreshing browser: {cmd}")
         try:
-            subprocess.run(["pkill", "-f", "chromium"], timeout=5)
-            time.sleep(2)
-            proc = subprocess.Popen(
-                [chromium, "--kiosk", "--noerrdialogs", "--disable-infobars"],
-                env=session_env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            # Give chromium a moment to fail fast on display errors.
-            time.sleep(1)
-            if proc.poll() is not None:
-                err = proc.stderr.read().decode("utf-8", errors="replace").strip()
-                log.warning(f"Chromium exited immediately (rc={proc.returncode}): {err}")
-            else:
-                log.info(f"Chromium relaunched (pid={proc.pid})")
+            subprocess.run(cmd, shell=True, timeout=15, check=True)
+            log.info("Browser refresh command completed")
+        except subprocess.CalledProcessError as e:
+            log.warning(f"Browser refresh command failed (rc={e.returncode}): {cmd}")
         except Exception as e:
             log.warning(f"Browser refresh failed: {e}")
 
